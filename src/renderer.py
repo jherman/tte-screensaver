@@ -8,11 +8,14 @@ from pathlib import Path
 import pygame
 
 
-# ANSI escape code patterns - pre-compiled for speed
-ANSI_ESCAPE = re.compile(r"\x1b\[([0-9;]*)m")
-ANSI_CURSOR_POS = re.compile(r"\x1b\[(\d+);(\d+)H")
-ANSI_CLEAR = re.compile(r"\x1b\[2?J")
-ANSI_ANY = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+# Splits a frame into text runs and the tokens that move the cursor or change color.
+# A malformed escape such as "\x1b[?25l" is not a token, so it stays in the text and is drawn.
+ANSI_TOKEN = re.compile(r"(\x1b\[[0-9;]*[A-Za-z]|\n|\r)")
+CURSOR_POS_PARAMS = re.compile(r"(\d+);(\d+)")
+
+# SGR tokens that set no foreground color (e.g. "\x1b[1m") leave the current color unchanged.
+KEEP_COLOR = object()
+SGR_CACHE_LIMIT = 65536
 
 # Type alias for cell data
 CellData = Tuple[str, Tuple[int, int, int]]  # (char, color)
@@ -55,6 +58,7 @@ class ANSIRenderer:
 
         # Character surface cache for performance
         self._char_cache: dict = {}
+        self._sgr_colors: dict = {}
 
         # Pre-create background tile for clearing cells
         self._bg_tile = pygame.Surface((self.char_width, self.char_height))
@@ -100,58 +104,42 @@ class ANSIRenderer:
         Returns list of (row, col, char, color) tuples - much faster than full grid.
         """
         cells = []
-        current_color = self.default_fg_color
-        cursor_row = 0
-        cursor_col = 0
+        append = cells.append
+        sgr_colors = self._sgr_colors
+        color = self.default_fg_color
+        row = col = 0
 
-        i = 0
-        frame_len = len(frame)
-        while i < frame_len:
-            char = frame[i]
+        parts = ANSI_TOKEN.split(frame)
+        # parts alternates text, token, text, ...; pair each text run with the token before it.
+        for token, text in zip(["", *parts[1::2]], parts[::2]):
+            if token == "\n":
+                row += 1
+                col = 0
+            elif token == "\r":
+                col = 0
+            elif token:
+                final = token[-1]
+                if final == "m":
+                    new_color = sgr_colors.get(token)
+                    if new_color is None:
+                        if len(sgr_colors) >= SGR_CACHE_LIMIT:
+                            sgr_colors.clear()
+                        new_color = sgr_colors[token] = self._parse_color_codes(token[2:-1].split(";"), KEEP_COLOR)
+                    if new_color is not KEEP_COLOR:
+                        color = new_color
+                elif final == "H":
+                    position = CURSOR_POS_PARAMS.fullmatch(token, 2, len(token) - 1)
+                    if position:
+                        row = int(position[1]) - 1
+                        col = int(position[2]) - 1
 
-            # Check for ANSI escape sequence
-            if char == "\x1b" and i + 1 < frame_len and frame[i + 1] == "[":
-                # Try to match cursor position code first
-                pos_match = ANSI_CURSOR_POS.match(frame, i)
-                if pos_match:
-                    cursor_row = int(pos_match.group(1)) - 1
-                    cursor_col = int(pos_match.group(2)) - 1
-                    i = pos_match.end()
-                    continue
-
-                # Try to match color code
-                color_match = ANSI_ESCAPE.match(frame, i)
-                if color_match:
-                    codes = color_match.group(1).split(";")
-                    current_color = self._parse_color_codes(codes, current_color)
-                    i = color_match.end()
-                    continue
-
-                # Skip other ANSI codes
-                other_match = ANSI_ANY.match(frame, i)
-                if other_match:
-                    i = other_match.end()
-                    continue
-
-            # Handle newline
-            if char == "\n":
-                cursor_row += 1
-                cursor_col = 0
-                i += 1
-                continue
-
-            # Handle carriage return
-            if char == "\r":
-                cursor_col = 0
-                i += 1
-                continue
-
-            # Non-space character - add to sparse list
-            if char != " " and 0 <= cursor_row < canvas_height and 0 <= cursor_col < canvas_width:
-                cells.append((cursor_row, cursor_col, char, current_color))
-
-            cursor_col += 1
-            i += 1
+            if text:
+                if 0 <= row < canvas_height and col < canvas_width and text.strip(" "):
+                    skip = -col if col < 0 else 0
+                    for c, char in enumerate(text[skip:canvas_width - col], col + skip):
+                        if char != " ":
+                            append((row, c, char, color))
+                col += len(text)
 
         return cells
 
