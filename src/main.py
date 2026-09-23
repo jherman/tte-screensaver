@@ -8,11 +8,14 @@ Windows screensaver command-line arguments:
   (no args) - Show configuration dialog
 """
 
+import multiprocessing
 import sys
 
 
 def main() -> None:
     """Main entry point for the screensaver."""
+    # In the frozen .scr, monitor worker processes re-launch this executable; this hands them off.
+    multiprocessing.freeze_support()
     args = [arg.lower() for arg in sys.argv[1:]]
 
     if not args:

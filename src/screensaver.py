@@ -1,16 +1,19 @@
 """Main screensaver pygame loop."""
 
+import multiprocessing
 import os
+import queue
 import sys
 import random
 import pygame
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, Dict
+from multiprocessing.context import BaseContext
+from multiprocessing.synchronize import Event
+from typing import Optional, Tuple, List
 
 from .config import Config, load_config
-from .ansi import Cells, diff_cells, parse_frame
+from .monitor_worker import WorkerSpec, run_worker
 from .renderer import ANSIRenderer
-from .effects import EffectManager
 
 
 @dataclass
@@ -91,7 +94,7 @@ def get_monitors() -> List[MonitorInfo]:
 
 
 class MonitorEffect:
-    """Manages effect rendering for a single monitor."""
+    """Draws one monitor's effects, which a worker process generates and diffs."""
 
     def __init__(
         self,
@@ -99,7 +102,9 @@ class MonitorEffect:
         config: Config,
         renderer: ANSIRenderer,
         virtual_origin: Tuple[int, int],
-        start_index: int = 0,
+        start_index: int,
+        context: BaseContext,
+        stop: Event,
     ):
         self.monitor = monitor
         self.config = config
@@ -113,35 +118,49 @@ class MonitorEffect:
         self.canvas_width = monitor.width // renderer.char_width
         self.canvas_height = monitor.height // renderer.char_height
 
-        # Create effect manager for this monitor with unique starting effect
-        self.effect_manager = EffectManager(
+        self.effect_name: Optional[str] = None
+        self._worker_lost = False
+        # Bounded so the worker runs at most two frames ahead of the display.
+        self.deltas = context.Queue(maxsize=2)
+        spec = WorkerSpec(
             text=config.ascii_art,
             enabled_effects=config.enabled_effects,
             canvas_width=self.canvas_width,
             canvas_height=self.canvas_height,
             start_index=start_index,
         )
-
-        # Track previous frame for delta rendering
-        self._prev_cells: Cells = {}
+        self.process = context.Process(target=run_worker, args=(spec, self.deltas, stop), daemon=True)
+        self.process.start()
 
     def update_and_render(self, surface: pygame.Surface) -> None:
-        """Get next frame and render to the surface using delta rendering."""
-        frame = self.effect_manager.get_next_frame()
+        """Blit the worker's next delta, if one is ready. At most one per tick keeps effects at display speed."""
+        if self._worker_lost:
+            return
+        try:
+            self.effect_name, clears, draws = self.deltas.get_nowait()
+        except queue.Empty:
+            if not self.process.is_alive():
+                self._blank(surface)
+            return
+        except Exception as e:
+            print(f"Monitor worker delta unreadable: {e}", file=sys.stderr)
+            self._blank(surface)
+            return
+        self.renderer.apply_delta(surface, clears, draws, self.offset_x, self.offset_y)
 
-        if frame is None:
-            # Effect completed, switch to next random effect
-            self.effect_manager.switch_to_next_effect()
-            # Reset prev_cells on effect switch (need full redraw)
-            self._prev_cells = {}
-            frame = self.effect_manager.get_next_frame()
+    def _blank(self, surface: pygame.Surface) -> None:
+        """A dead worker blanks its monitor instead of taking down the screensaver."""
+        self._worker_lost = True
+        surface.fill(
+            self.config.background_color,
+            pygame.Rect(self.offset_x, self.offset_y, self.monitor.width, self.monitor.height),
+        )
 
-        if frame:
-            # Use delta rendering - only update changed cells
-            cells = parse_frame(frame, self.canvas_width, self.canvas_height)
-            clears, draws = diff_cells(self._prev_cells, cells)
-            self.renderer.apply_delta(surface, clears, draws, self.offset_x, self.offset_y)
-            self._prev_cells = cells
+    def close(self, timeout: float = 1.0) -> None:
+        self.process.join(timeout)
+        if self.process.is_alive():
+            self.process.terminate()
+            self.process.join(timeout)
 
 
 class Screensaver:
@@ -219,6 +238,9 @@ class Screensaver:
 
     def run(self, fullscreen: bool = True) -> None:
         """Run the screensaver main loop."""
+        # Spawn on every platform: workers must not inherit pygame or display state.
+        context = multiprocessing.get_context("spawn")
+        stop_workers = context.Event()
         try:
             screen_size = self._init_pygame(fullscreen)
 
@@ -249,7 +271,9 @@ class Screensaver:
             self.monitor_effects = [
                 MonitorEffect(
                     monitor, self.config, self.renderer, virtual_origin,
-                    start_index=(i * num_effects // len(monitors)) + random.randint(0, 5)
+                    start_index=(i * num_effects // len(monitors)) + random.randint(0, 5),
+                    context=context,
+                    stop=stop_workers,
                 )
                 for i, monitor in enumerate(monitors)
             ]
@@ -276,7 +300,11 @@ class Screensaver:
             print(f"Screensaver error: {e}", file=sys.stderr)
             raise
         finally:
+            stop_workers.set()
+            # Close the window first so exiting feels instant, then reap the workers.
             pygame.quit()
+            for monitor_effect in self.monitor_effects:
+                monitor_effect.close()
 
 
 def run_screensaver(fullscreen: bool = True, config: Optional[Config] = None) -> None:
