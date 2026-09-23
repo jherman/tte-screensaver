@@ -1,7 +1,6 @@
 """Effect management and cycling for tte-screensaver."""
 
 import random
-import threading
 from typing import Iterator, Optional, Dict, Type, List
 
 # Import all available TTE effects
@@ -88,7 +87,11 @@ def get_available_effect_names() -> List[str]:
 
 
 class EffectManager:
-    """Manages effect creation and cycling with background pre-loading."""
+    """Plays one effect at a time and cycles to a random different one when it ends.
+
+    Each effect is built when it starts playing, not ahead of time: some TTE effects (e.g. Matrix's
+    rain phase) run on a wall-clock timer that starts when the effect's iterator is created.
+    """
 
     def __init__(
         self,
@@ -109,26 +112,13 @@ class EffectManager:
         if not self.enabled_effects:
             self.enabled_effects = ["Matrix", "Rain", "Decrypt"]
 
-        # Don't shuffle - use truly random selection each time
-        # This prevents monitors from syncing up
-
         # Start at a random index (or specified one for diversity across monitors)
         if start_index is not None:
             self._current_index = start_index % len(self.enabled_effects)
         else:
             self._current_index = random.randint(0, len(self.enabled_effects) - 1)
 
-        self._current_iterator: Optional[Iterator[str]] = None
-        self._next_iterator: Optional[Iterator[str]] = None
-        self._next_index: Optional[int] = None
-        self._effect_completed = False
-        self._preload_lock = threading.Lock()
-        self._preload_ready = threading.Event()
-
-        # Create first effect (blocking - need it now)
-        self._current_iterator = self._create_effect_iterator(self._current_index)
-        # Start background pre-load of next effect
-        self._start_background_preload()
+        self._current_iterator: Optional[Iterator[str]] = self._create_effect_iterator(self._current_index)
 
     def _create_effect_iterator(self, index: int) -> Iterator[str]:
         """Create an effect iterator for the given index."""
@@ -144,47 +134,16 @@ class EffectManager:
 
         return iter(effect)
 
-    def _start_background_preload(self) -> None:
-        """Start pre-loading next effect in background thread."""
-        self._preload_ready.clear()
-        thread = threading.Thread(target=self._preload_worker, daemon=True)
-        thread.start()
-
-    def _preload_worker(self) -> None:
-        """Background worker to create next effect."""
-        if len(self.enabled_effects) > 1:
-            choices = [i for i in range(len(self.enabled_effects)) if i != self._current_index]
-            next_idx = random.choice(choices)
-        else:
-            next_idx = 0
-
-        # Create the effect (this is the slow part)
-        next_iter = self._create_effect_iterator(next_idx)
-
-        # Store results thread-safely
-        with self._preload_lock:
-            self._next_index = next_idx
-            self._next_iterator = next_iter
-        self._preload_ready.set()
-
     def get_current_effect_name(self) -> str:
         """Get the name of the currently active effect."""
         return self.enabled_effects[self._current_index]
 
     def switch_to_next_effect(self) -> None:
-        """Switch to the pre-loaded next effect (instant, no stutter)."""
-        # Wait for pre-load if not ready (should be ready by now)
-        self._preload_ready.wait(timeout=0.1)
-
-        with self._preload_lock:
-            if self._next_iterator is not None:
-                self._current_index = self._next_index
-                self._current_iterator = self._next_iterator
-                self._next_iterator = None
-            self._effect_completed = False
-
-        # Start background pre-load of the NEXT next effect
-        self._start_background_preload()
+        """Switch to a random effect other than the current one (the same one if it is the only one)."""
+        if len(self.enabled_effects) > 1:
+            choices = [i for i in range(len(self.enabled_effects)) if i != self._current_index]
+            self._current_index = random.choice(choices)
+        self._current_iterator = self._create_effect_iterator(self._current_index)
 
     def get_next_frame(self) -> Optional[str]:
         """Get the next frame. Returns None when effect completes or errors."""
@@ -194,10 +153,8 @@ class EffectManager:
         try:
             return next(self._current_iterator)
         except StopIteration:
-            self._effect_completed = True
             return None
         except Exception:
             # Some TTE effects have bugs (e.g., Blackhole IndexError)
             # Gracefully skip to next effect
-            self._effect_completed = True
             return None
