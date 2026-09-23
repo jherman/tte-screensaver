@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, List, Dict
 
 from .config import Config, load_config
-from .renderer import ANSIRenderer, CellData
+from .ansi import Cells, diff_cells, parse_frame
+from .renderer import ANSIRenderer
 from .effects import EffectManager
 
 
@@ -122,7 +123,7 @@ class MonitorEffect:
         )
 
         # Track previous frame for delta rendering
-        self._prev_cells: Dict[Tuple[int, int], CellData] = {}
+        self._prev_cells: Cells = {}
 
     def update_and_render(self, surface: pygame.Surface) -> None:
         """Get next frame and render to the surface using delta rendering."""
@@ -137,15 +138,10 @@ class MonitorEffect:
 
         if frame:
             # Use delta rendering - only update changed cells
-            self._prev_cells = self.renderer.render_frame_delta(
-                frame,
-                surface,
-                self._prev_cells,
-                offset_x=self.offset_x,
-                offset_y=self.offset_y,
-                canvas_width=self.canvas_width,
-                canvas_height=self.canvas_height,
-            )
+            cells = parse_frame(frame, self.canvas_width, self.canvas_height)
+            clears, draws = diff_cells(self._prev_cells, cells)
+            self.renderer.apply_delta(surface, clears, draws, self.offset_x, self.offset_y)
+            self._prev_cells = cells
 
 
 class Screensaver:

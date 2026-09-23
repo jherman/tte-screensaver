@@ -1,18 +1,17 @@
 import pytest
 
-from src.renderer import ANSIRenderer
+from src.ansi import diff_cells, parse_frame
 
 WHITE = (255, 255, 255)
 ESC = "\x1b["
 
 
-@pytest.fixture(scope="module")
-def renderer():
-    return ANSIRenderer(font_size=12)
+def parse(frame, width=200, height=100):
+    return parse_frame(frame, width, height)
 
 
-def parse(renderer, frame, width=200, height=100):
-    return renderer.parse_ansi_frame_sparse(frame, width, height)
+def cells(entries):
+    return {(row, col): (char, color) for row, col, char, color in entries}
 
 
 @pytest.mark.parametrize(
@@ -29,8 +28,8 @@ def parse(renderer, frame, width=200, height=100):
         ("█╗", [(0, 0, "█", WHITE), (0, 1, "╗", WHITE)]),
     ],
 )
-def test_text_layout(renderer, frame, expected):
-    assert parse(renderer, frame) == expected
+def test_text_layout(frame, expected):
+    assert parse(frame) == cells(expected)
 
 
 @pytest.mark.parametrize(
@@ -47,8 +46,8 @@ def test_text_layout(renderer, frame, expected):
         (f"a{ESC}Kx", [(0, 0, "a", WHITE), (0, 1, "x", WHITE)]),
     ],
 )
-def test_cursor_and_control_sequences(renderer, frame, expected):
-    assert parse(renderer, frame) == expected
+def test_cursor_and_control_sequences(frame, expected):
+    assert parse(frame) == cells(expected)
 
 
 @pytest.mark.parametrize(
@@ -61,8 +60,8 @@ def test_cursor_and_control_sequences(renderer, frame, expected):
         (f"x{ESC}", [(0, 0, "x", WHITE), (0, 1, "\x1b", WHITE), (0, 2, "[", WHITE)]),
     ],
 )
-def test_unrecognized_escapes_are_drawn_as_text(renderer, frame, expected):
-    assert parse(renderer, frame) == expected
+def test_unrecognized_escapes_are_drawn_as_text(frame, expected):
+    assert parse(frame) == cells(expected)
 
 
 @pytest.mark.parametrize(
@@ -95,22 +94,22 @@ def test_unrecognized_escapes_are_drawn_as_text(renderer, frame, expected):
         ("38", (1, 2, 3)),
     ],
 )
-def test_sgr_color_after_truecolor(renderer, sgr, color):
+def test_sgr_color_after_truecolor(sgr, color):
     frame = f"{ESC}38;2;1;2;3ma{ESC}{sgr}mb"
-    assert parse(renderer, frame) == [(0, 0, "a", (1, 2, 3)), (0, 1, "b", color)]
+    assert parse(frame) == cells([(0, 0, "a", (1, 2, 3)), (0, 1, "b", color)])
 
 
-def test_color_persists_across_text_newlines_and_cursor_moves(renderer):
+def test_color_persists_across_text_newlines_and_cursor_moves():
     frame = f"{ESC}31ma\nb{ESC}5;5Hc{ESC}0md"
     red = (170, 0, 0)
-    assert parse(renderer, frame) == [
+    assert parse(frame) == cells([
         (0, 0, "a", red), (1, 0, "b", red), (4, 4, "c", red), (4, 5, "d", WHITE),
-    ]
+    ])
 
 
-def test_color_starts_white_on_every_call(renderer):
-    parse(renderer, f"{ESC}31ma")
-    assert parse(renderer, "a") == [(0, 0, "a", WHITE)]
+def test_color_starts_white_on_every_call():
+    parse(f"{ESC}31ma")
+    assert parse("a") == cells([(0, 0, "a", WHITE)])
 
 
 @pytest.mark.parametrize(
@@ -125,13 +124,39 @@ def test_color_starts_white_on_every_call(renderer):
         (f"{ESC}1;2Habc", 2, 2, [(0, 1, "a", WHITE)]),
     ],
 )
-def test_clipping_to_canvas(renderer, frame, width, height, expected):
-    assert parse(renderer, frame, width, height) == expected
+def test_clipping_to_canvas(frame, width, height, expected):
+    assert parse(frame, width, height) == cells(expected)
 
 
-def test_parse_to_dict_keeps_last_write_per_cell(renderer):
+def test_last_write_to_a_cell_wins():
     frame = f"ab{ESC}1;1H{ESC}31mX"
-    assert renderer.parse_to_dict(frame, 10, 10) == {
+    assert parse(frame, 10, 10) == {
         (0, 0): ("X", (170, 0, 0)),
         (0, 1): ("b", WHITE),
     }
+
+
+RED = (170, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "prev, curr, clears, draws",
+    [
+        ({}, {}, [], []),
+        ({}, {(0, 0): ("a", WHITE)}, [], [(0, 0, "a", WHITE)]),
+        ({(0, 0): ("a", WHITE)}, {(0, 0): ("a", WHITE)}, [], []),
+        ({(0, 0): ("a", WHITE)}, {}, [(0, 0)], []),
+        ({(0, 0): ("a", WHITE)}, {(0, 0): ("b", WHITE)}, [(0, 0)], [(0, 0, "b", WHITE)]),
+        ({(0, 0): ("a", WHITE)}, {(0, 0): ("a", RED)}, [(0, 0)], [(0, 0, "a", RED)]),
+        (
+            {(0, 0): ("a", WHITE), (1, 1): ("b", WHITE), (2, 2): ("c", WHITE)},
+            {(1, 1): ("b", WHITE), (2, 2): ("x", WHITE), (3, 3): ("d", RED)},
+            [(0, 0), (2, 2)],
+            [(2, 2, "x", WHITE), (3, 3, "d", RED)],
+        ),
+    ],
+)
+def test_diff_cells(prev, curr, clears, draws):
+    actual_clears, actual_draws = diff_cells(prev, curr)
+    assert sorted(actual_clears) == clears
+    assert sorted(actual_draws) == draws

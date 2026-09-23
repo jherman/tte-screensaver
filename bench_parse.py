@@ -2,7 +2,7 @@
 
 Run from the repo root:  python bench_parse.py [frames]
 No window is opened; drawing goes to an offscreen surface of the monitor's size.
-draw ms is render_frame_delta fed the already-parsed cells: diffing, glyph rendering, and blits.
+draw ms covers diffing against the previous frame, glyph rendering, and blits.
 """
 
 import os
@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.config import load_config
 from src.effects import EffectManager
+from src.ansi import diff_cells, parse_frame
 from src.renderer import ANSIRenderer
 
 import pygame
@@ -34,11 +35,10 @@ def bench(renderer: ANSIRenderer, text: str, effect: str, width: int, height: in
         generated = time.perf_counter()
         if frame is None:
             break
-        cells = renderer.parse_to_dict(frame, width, height)
+        cells = parse_frame(frame, width, height)
         parsed = time.perf_counter()
-        renderer.parse_to_dict = lambda *_: cells
-        prev_cells = renderer.render_frame_delta(frame, surface, prev_cells, canvas_width=width, canvas_height=height)
-        del renderer.parse_to_dict
+        renderer.apply_delta(surface, *diff_cells(prev_cells, cells))
+        prev_cells = cells
         draw.append(time.perf_counter() - parsed)
         parse.append(parsed - generated)
         generate.append(generated - started)
