@@ -1,11 +1,16 @@
 """Pygame renderer that draws parsed ANSI cells as cached glyphs."""
 
 import sys
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 import pygame
 
 from .ansi import DrawOp, Position
+
+# Fonts that cover glyphs the bundled font lacks, such as the half-width katakana in TTE's Matrix rain.
+FALLBACK_FONT_NAMES = ["ms gothic", "yu gothic", "noto sans mono cjk jp", "noto sans cjk jp"]
+# A Unicode noncharacter: every font draws its missing-glyph box for it.
+MISSING_GLYPH_PROBE = "\uffff"
 
 
 def get_bundled_font_path() -> Optional[Path]:
@@ -44,6 +49,9 @@ class ANSIRenderer:
 
         # Character surface cache for performance
         self._char_cache: dict = {}
+        self._missing_glyph = self._glyph_signature(self.font, MISSING_GLYPH_PROBE)
+        self._missing_chars: Dict[str, bool] = {}
+        self._fallback_font = self._get_fallback_font(font_size)
 
         # Pre-create background tile for clearing cells
         self._bg_tile = pygame.Surface((self.char_width, self.char_height))
@@ -83,14 +91,46 @@ class ANSIRenderer:
         # Fallback to default font
         return pygame.font.Font(None, size)
 
+    @staticmethod
+    def _get_fallback_font(size: int) -> Optional[pygame.font.Font]:
+        for font_name in FALLBACK_FONT_NAMES:
+            path = pygame.font.match_font(font_name)
+            if path:
+                try:
+                    return pygame.font.Font(path, size)
+                except Exception:
+                    continue
+        return None
+
+    @staticmethod
+    def _glyph_signature(font: pygame.font.Font, char: str) -> Tuple[Tuple[int, int], bytes]:
+        glyph = font.render(char, True, (255, 255, 255))
+        # The glyph's shape is only in the alpha channel; RGB is the flat text color.
+        return glyph.get_size(), pygame.image.tobytes(glyph, "RGBA")
+
     def get_char_surface(
         self, char: str, color: Tuple[int, int, int]
     ) -> pygame.Surface:
         """Get a cached surface for a character with given color."""
         cache_key = (char, color)
-        if cache_key not in self._char_cache:
-            self._char_cache[cache_key] = self.font.render(char, True, color)
-        return self._char_cache[cache_key]
+        surface = self._char_cache.get(cache_key)
+        if surface is None:
+            surface = self._char_cache[cache_key] = self._render_char(char, color)
+        return surface
+
+    def _render_char(self, char: str, color: Tuple[int, int, int]) -> pygame.Surface:
+        if self._fallback_font is None or not self._is_missing_glyph(char):
+            return self.font.render(char, True, color)
+        glyph = self._fallback_font.render(char, True, color)
+        cell = pygame.Surface((self.char_width, self.char_height), pygame.SRCALPHA)
+        cell.blit(glyph, ((self.char_width - glyph.get_width()) // 2, (self.char_height - glyph.get_height()) // 2))
+        return cell
+
+    def _is_missing_glyph(self, char: str) -> bool:
+        missing = self._missing_chars.get(char)
+        if missing is None:
+            missing = self._missing_chars[char] = self._glyph_signature(self.font, char) == self._missing_glyph
+        return missing
 
     def apply_delta(
         self,

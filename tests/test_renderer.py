@@ -52,3 +52,25 @@ def test_clears_are_blitted_before_draws(renderer):
     renderer.apply_delta(surface, [(0, 0)], [(0, 0, "M", RED)])
     assert (0, 0, 255) not in lit_pixels(surface, renderer, 0, 0)
     assert RED in lit_pixels(surface, renderer, 0, 0)
+
+
+def glyph_pixels(surface):
+    return surface.get_size(), pygame.image.tobytes(surface, "RGBA")
+
+
+@pytest.mark.parametrize("char", ["ｱ", "ﾝ"])
+def test_chars_missing_from_the_bundled_font_use_a_fallback_font(renderer, char):
+    if not pygame.font.match_font("ms gothic"):
+        pytest.skip("no fallback font with half-width katakana installed")
+    missing_glyph_box = glyph_pixels(renderer.font.render("\uffff", True, RED))
+    assert glyph_pixels(renderer.font.render(char, True, RED)) == missing_glyph_box
+
+    drawn = renderer.get_char_surface(char, RED)
+
+    assert drawn.get_size() == (renderer.char_width, renderer.char_height)
+    assert glyph_pixels(drawn) != missing_glyph_box
+    assert any(drawn.get_at((x, y)).a for x in range(drawn.get_width()) for y in range(drawn.get_height()))
+
+
+def test_chars_in_the_bundled_font_render_with_it(renderer):
+    assert glyph_pixels(renderer.get_char_surface("Z", RED)) == glyph_pixels(renderer.font.render("Z", True, RED))
