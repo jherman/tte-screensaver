@@ -1,7 +1,6 @@
 """Effect management and cycling for tte-screensaver."""
 
 import random
-import time
 from typing import Iterator, Optional, Dict, Type, List
 
 # Import all available TTE effects
@@ -19,7 +18,6 @@ from terminaltexteffects.effects.effect_expand import Expand
 from terminaltexteffects.effects.effect_fireworks import Fireworks
 from terminaltexteffects.effects.effect_highlight import Highlight
 from terminaltexteffects.effects.effect_laseretch import LaserEtch
-from terminaltexteffects.effects.effect_matrix import Matrix
 from terminaltexteffects.effects.effect_middleout import MiddleOut
 from terminaltexteffects.effects.effect_orbittingvolley import OrbittingVolley
 from terminaltexteffects.effects.effect_overflow import Overflow
@@ -41,6 +39,8 @@ from terminaltexteffects.effects.effect_vhstape import VHSTape
 from terminaltexteffects.effects.effect_waves import Waves
 from terminaltexteffects.effects.effect_wipe import Wipe
 
+from .sparse_matrix import SparseMatrix
+
 
 # Map of effect names to their classes
 AVAILABLE_EFFECTS: Dict[str, Type] = {
@@ -58,7 +58,7 @@ AVAILABLE_EFFECTS: Dict[str, Type] = {
     "Fireworks": Fireworks,
     "Highlight": Highlight,
     "LaserEtch": LaserEtch,
-    "Matrix": Matrix,
+    "Matrix": SparseMatrix,
     "MiddleOut": MiddleOut,
     "OrbittingVolley": OrbittingVolley,
     "Overflow": Overflow,
@@ -79,19 +79,6 @@ AVAILABLE_EFFECTS: Dict[str, Type] = {
     "VHSTape": VHSTape,
     "Waves": Waves,
     "Wipe": Wipe,
-}
-
-
-# Screensaver tuning applied to TTE's effect_config before an effect starts.
-EFFECT_CONFIG_OVERRIDES: Dict[str, Dict[str, object]] = {
-    # Keep the classic sparse rain. TTE treats rain_time 0 as no limit, so it never fills the
-    # screen and resolves to the text.
-    "Matrix": {"rain_time": 0},
-}
-
-# Seconds before cycling away from effects that, as configured above, never end on their own.
-EFFECT_TIME_LIMITS: Dict[str, float] = {
-    "Matrix": 60.0,
 }
 
 
@@ -132,15 +119,7 @@ class EffectManager:
         else:
             self._current_index = random.randint(0, len(self.enabled_effects) - 1)
 
-        self._current_iterator: Optional[Iterator[str]] = None
-        self._deadline: Optional[float] = None
-        self._start_effect(self._current_index)
-
-    def _start_effect(self, index: int) -> None:
-        self._current_index = index
-        self._current_iterator = self._create_effect_iterator(index)
-        limit = EFFECT_TIME_LIMITS.get(self.enabled_effects[index])
-        self._deadline = time.monotonic() + limit if limit is not None else None
+        self._current_iterator: Optional[Iterator[str]] = self._create_effect_iterator(self._current_index)
 
     def _create_effect_iterator(self, index: int) -> Iterator[str]:
         """Create an effect iterator for the given index."""
@@ -153,8 +132,6 @@ class EffectManager:
         effect.terminal_config.canvas_height = self.canvas_height
         effect.terminal_config.anchor_text = "c"
         effect.terminal_config.frame_rate = 0
-        for name, value in EFFECT_CONFIG_OVERRIDES.get(effect_name, {}).items():
-            setattr(effect.effect_config, name, value)
 
         return iter(effect)
 
@@ -164,17 +141,14 @@ class EffectManager:
 
     def switch_to_next_effect(self) -> None:
         """Switch to a random effect other than the current one (the same one if it is the only one)."""
-        next_index = self._current_index
         if len(self.enabled_effects) > 1:
             choices = [i for i in range(len(self.enabled_effects)) if i != self._current_index]
-            next_index = random.choice(choices)
-        self._start_effect(next_index)
+            self._current_index = random.choice(choices)
+        self._current_iterator = self._create_effect_iterator(self._current_index)
 
     def get_next_frame(self) -> Optional[str]:
         """Get the next frame. Returns None when effect completes or errors."""
         if self._current_iterator is None:
-            return None
-        if self._deadline is not None and time.monotonic() >= self._deadline:
             return None
 
         try:
