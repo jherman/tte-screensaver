@@ -101,8 +101,11 @@ class EffectManager:
         canvas_width: int = 80,
         canvas_height: int = 24,
         start_index: Optional[int] = None,
+        seed: Optional[int] = None,
     ):
+        """Managers built with the same enabled effects, start_index and seed pick the same effects in order."""
         self.text = text
+        self._random = random.Random(seed)
         self.canvas_width = canvas_width
         self.canvas_height = canvas_height
 
@@ -117,7 +120,7 @@ class EffectManager:
         if start_index is not None:
             self._current_index = start_index % len(self.enabled_effects)
         else:
-            self._current_index = random.randint(0, len(self.enabled_effects) - 1)
+            self._current_index = self._random.randrange(len(self.enabled_effects))
 
         self._current_iterator: Optional[Iterator[str]] = self._create_effect_iterator(self._current_index)
 
@@ -143,7 +146,7 @@ class EffectManager:
         """Switch to a random effect other than the current one (the same one if it is the only one)."""
         if len(self.enabled_effects) > 1:
             choices = [i for i in range(len(self.enabled_effects)) if i != self._current_index]
-            self._current_index = random.choice(choices)
+            self._current_index = self._random.choice(choices)
         self._current_iterator = self._create_effect_iterator(self._current_index)
 
     def get_next_frame(self) -> Optional[str]:

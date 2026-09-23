@@ -111,6 +111,14 @@ class ConfigDialog:
         fps_entry = ttk.Entry(fps_frame, textvariable=self.fps_var, width=10)
         fps_entry.pack(side=tk.LEFT, padx=(10, 0))
 
+        # Multi-monitor
+        self.sync_monitors_var = tk.BooleanVar(value=self.config.sync_monitors)
+        ttk.Checkbutton(
+            settings_frame,
+            text="Show the same effect on every monitor (monitors switch effects together)",
+            variable=self.sync_monitors_var,
+        ).pack(anchor=tk.W, pady=(6, 2))
+
         # Buttons
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=(10, 0))
@@ -181,6 +189,7 @@ class ConfigDialog:
             font_size=font_size,
             background_color=self.config.background_color,
             target_fps=fps,
+            sync_monitors=self.sync_monitors_var.get(),
         )
 
     def _save(self) -> None:

@@ -136,6 +136,8 @@ class MonitorEffect:
         start_index: int,
         context: BaseContext,
         stop: Event,
+        seed: Optional[int] = None,
+        switch_barrier=None,
     ):
         self.monitor = monitor
         self.config = config
@@ -159,8 +161,12 @@ class MonitorEffect:
             canvas_width=self.canvas_width,
             canvas_height=self.canvas_height,
             start_index=start_index,
+            seed=seed,
         )
-        self.process = context.Process(target=run_worker, args=(spec, self.deltas, stop), daemon=True)
+        self._switch_barrier = switch_barrier
+        self.process = context.Process(
+            target=run_worker, args=(spec, self.deltas, stop, switch_barrier), daemon=True
+        )
         self.process.start()
 
     def update_and_render(self, surface: pygame.Surface) -> None:
@@ -182,6 +188,9 @@ class MonitorEffect:
     def _blank(self, surface: pygame.Surface) -> None:
         """A dead worker blanks its monitor instead of taking down the screensaver."""
         self._worker_lost = True
+        if self._switch_barrier is not None:
+            # Release the other monitors instead of leaving them waiting for this one forever.
+            self._switch_barrier.abort()
         surface.fill(
             self.config.background_color,
             pygame.Rect(self.offset_x, self.offset_y, self.monitor.width, self.monitor.height),
@@ -271,6 +280,7 @@ class Screensaver:
         # Spawn on every platform: workers must not inherit pygame or display state.
         context = multiprocessing.get_context("spawn")
         stop_workers = context.Event()
+        switch_barrier = None
         if fullscreen:
             enable_dpi_awareness()
         try:
@@ -300,15 +310,27 @@ class Screensaver:
                     renderers[font_size] = ANSIRenderer(font_size, self.config.background_color)
                 return renderers[font_size]
 
-            # Create independent effect for each monitor with different starting effects
-            # Spread start indices apart so monitors don't show same effect
             num_effects = len(self.config.enabled_effects)
+            if self.config.sync_monitors and len(monitors) > 1:
+                # Same start, same seed: every monitor picks the same effects, and the barrier
+                # makes them switch together.
+                switch_barrier = context.Barrier(len(monitors))
+                shared_seed = random.randrange(2**32)
+                shared_start = random.randrange(num_effects)
+                start_for = lambda i: shared_start
+                seed = shared_seed
+            else:
+                # Spread start indices apart so monitors don't show same effect
+                start_for = lambda i: (i * num_effects // len(monitors)) + random.randint(0, 5)
+                seed = None
             self.monitor_effects = [
                 MonitorEffect(
                     monitor, self.config, renderer_for(monitor), virtual_origin,
-                    start_index=(i * num_effects // len(monitors)) + random.randint(0, 5),
+                    start_index=start_for(i),
                     context=context,
                     stop=stop_workers,
+                    seed=seed,
+                    switch_barrier=switch_barrier,
                 )
                 for i, monitor in enumerate(monitors)
             ]
@@ -336,6 +358,8 @@ class Screensaver:
             raise
         finally:
             stop_workers.set()
+            if switch_barrier is not None:
+                switch_barrier.abort()
             # Close the window first so exiting feels instant, then reap the workers.
             pygame.quit()
             for monitor_effect in self.monitor_effects:

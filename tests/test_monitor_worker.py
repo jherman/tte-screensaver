@@ -126,3 +126,84 @@ def test_monitor_draws_worker_deltas_and_blanks_when_the_worker_dies(renderer):
         stop.set()
         monitor_effect.close()
     assert not monitor_effect.process.is_alive()
+
+
+def test_the_switch_hook_runs_after_an_effect_ends_and_before_the_next_starts():
+    events = []
+    effects = ScriptedEffects(("Beams", ["a"]), ("Matrix", ["b"]))
+    deltas = frame_deltas(effects, 10, 5, before_switch=lambda: events.append("switch"))
+    for _ in range(2):
+        events.append(next(deltas)[0])
+    assert events == ["Beams", "switch", "Matrix"]
+
+
+def effect_runs(names):
+    """Collapse consecutive repeats: ["A", "A", "B"] -> ["A", "B"]."""
+    return [name for index, name in enumerate(names) if index == 0 or names[index - 1] != name]
+
+
+def test_synced_workers_play_the_same_effects_in_the_same_order():
+    stop = SPAWN.Event()
+    barrier = SPAWN.Barrier(2)
+    queues, processes = [], []
+    for width, height in ((12, 3), (40, 12)):
+        spec = WorkerSpec(
+            text="hi", enabled_effects=["Print", "Slide", "Wipe", "Expand"],
+            canvas_width=width, canvas_height=height, start_index=0, seed=11,
+        )
+        deltas = SPAWN.Queue(maxsize=2)
+        process = SPAWN.Process(target=run_worker, args=(spec, deltas, stop, barrier), daemon=True)
+        process.start()
+        queues.append(deltas)
+        processes.append(process)
+    try:
+        seen = [[], []]
+        deadline = time.monotonic() + 120
+        while min(len(effect_runs(names)) for names in seen) < 5 and time.monotonic() < deadline:
+            for names, deltas in zip(seen, queues):
+                try:
+                    names.append(deltas.get(timeout=0.01)[0])
+                except Exception:
+                    pass
+        runs = [effect_runs(names)[:5] for names in seen]
+        assert len(runs[0]) == 5
+        assert runs[0] == runs[1]
+    finally:
+        stop.set()
+        barrier.abort()
+        for process in processes:
+            process.join(timeout=5)
+            if process.is_alive():
+                process.terminate()
+
+
+def test_an_aborted_switch_barrier_lets_a_worker_carry_on_alone():
+    stop = SPAWN.Event()
+    barrier = SPAWN.Barrier(2)
+    spec = WorkerSpec(text="hi", enabled_effects=["Print", "Slide"], canvas_width=12, canvas_height=3, start_index=0)
+    deltas = SPAWN.Queue(maxsize=2)
+    process = SPAWN.Process(target=run_worker, args=(spec, deltas, stop, barrier), daemon=True)
+    process.start()
+    names = []
+
+    def read_available():
+        for _ in range(50):
+            try:
+                names.append(deltas.get(timeout=0.01)[0])
+            except Exception:
+                return
+
+    try:
+        assert wait_for(lambda: read_available() or barrier.n_waiting == 1, timeout=60), (
+            "worker should hold at the end of its first effect, waiting for the missing monitor"
+        )
+        assert effect_runs(names) == ["Print"]
+
+        barrier.abort()
+        assert wait_for(lambda: read_available() or len(effect_runs(names)) >= 3, timeout=60)
+        assert effect_runs(names)[:3] == ["Print", "Slide", "Print"]
+    finally:
+        stop.set()
+        process.join(timeout=5)
+        if process.is_alive():
+            process.terminate()
