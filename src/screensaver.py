@@ -9,7 +9,7 @@ import pygame
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from multiprocessing.synchronize import Event
-from typing import Optional, Tuple, List
+from typing import Dict, Optional, Tuple, List
 
 from .config import Config, load_config
 from .monitor_worker import WorkerSpec, run_worker
@@ -23,6 +23,23 @@ class MonitorInfo:
     y: int
     width: int
     height: int
+    scale: float = 1.0  # Windows display scaling; 1.5 at 144 DPI. Always 1.0 unless the process is DPI-aware.
+
+
+def enable_dpi_awareness() -> None:
+    """Use physical pixels, so Windows stops bitmap-stretching the window on scaled monitors.
+
+    Call before any window exists or any geometry is read. The setting is process-wide and permanent.
+    """
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+    except (ImportError, AttributeError):
+        return  # Not Windows
+    try:
+        user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # PER_MONITOR_AWARE_V2
+    except AttributeError:
+        user32.SetProcessDPIAware()  # Before Windows 10 1703
 
 
 def get_virtual_desktop_size() -> Tuple[int, int, int, int]:
@@ -59,11 +76,11 @@ def get_monitors() -> List[MonitorInfo]:
 
         # Define the callback type
         MONITORENUMPROC = ctypes.WINFUNCTYPE(
-            ctypes.c_bool,
-            ctypes.c_ulong,
-            ctypes.c_ulong,
+            wintypes.BOOL,
+            wintypes.HMONITOR,
+            wintypes.HDC,
             ctypes.POINTER(wintypes.RECT),
-            ctypes.c_double
+            wintypes.LPARAM,
         )
 
         def monitor_enum_callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
@@ -72,7 +89,8 @@ def get_monitors() -> List[MonitorInfo]:
                 x=rect.left,
                 y=rect.top,
                 width=rect.right - rect.left,
-                height=rect.bottom - rect.top
+                height=rect.bottom - rect.top,
+                scale=_monitor_scale(hMonitor),
             ))
             return True
 
@@ -91,6 +109,19 @@ def get_monitors() -> List[MonitorInfo]:
     # Fallback: single monitor
     vx, vy, vw, vh = get_virtual_desktop_size()
     return [MonitorInfo(x=vx, y=vy, width=vw, height=vh)]
+
+
+def _monitor_scale(hmonitor) -> float:
+    try:
+        import ctypes
+        from ctypes import wintypes
+        dpi_x, dpi_y = wintypes.UINT(), wintypes.UINT()
+        # MDT_EFFECTIVE_DPI; Windows 8.1+
+        if ctypes.windll.shcore.GetDpiForMonitor(hmonitor, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)) == 0:
+            return dpi_x.value / 96
+    except (AttributeError, OSError):
+        pass
+    return 1.0
 
 
 class MonitorEffect:
@@ -172,7 +203,6 @@ class Screensaver:
         self.running = False
         self.screen: Optional[pygame.Surface] = None
         self.clock: Optional[pygame.time.Clock] = None
-        self.renderer: Optional[ANSIRenderer] = None
         self.monitor_effects: List[MonitorEffect] = []
 
         # Track mouse position for exit detection
@@ -241,14 +271,10 @@ class Screensaver:
         # Spawn on every platform: workers must not inherit pygame or display state.
         context = multiprocessing.get_context("spawn")
         stop_workers = context.Event()
+        if fullscreen:
+            enable_dpi_awareness()
         try:
             screen_size = self._init_pygame(fullscreen)
-
-            # Create renderer
-            self.renderer = ANSIRenderer(
-                font_size=self.config.font_size,
-                background_color=self.config.background_color,
-            )
 
             # Get virtual desktop origin for coordinate conversion
             vx, vy, _, _ = get_virtual_desktop_size()
@@ -263,14 +289,23 @@ class Screensaver:
 
             print(f"Detected {len(monitors)} monitor(s)", file=sys.stderr)
             for i, m in enumerate(monitors):
-                print(f"  Monitor {i+1}: {m.width}x{m.height} at ({m.x}, {m.y})", file=sys.stderr)
+                print(f"  Monitor {i+1}: {m.width}x{m.height} at ({m.x}, {m.y}) scale {m.scale:g}", file=sys.stderr)
+
+            # Scale the font with each monitor's DPI so text keeps its physical size and the grid its cell count.
+            renderers: Dict[int, ANSIRenderer] = {}
+
+            def renderer_for(monitor: MonitorInfo) -> ANSIRenderer:
+                font_size = round(self.config.font_size * monitor.scale)
+                if font_size not in renderers:
+                    renderers[font_size] = ANSIRenderer(font_size, self.config.background_color)
+                return renderers[font_size]
 
             # Create independent effect for each monitor with different starting effects
             # Spread start indices apart so monitors don't show same effect
             num_effects = len(self.config.enabled_effects)
             self.monitor_effects = [
                 MonitorEffect(
-                    monitor, self.config, self.renderer, virtual_origin,
+                    monitor, self.config, renderer_for(monitor), virtual_origin,
                     start_index=(i * num_effects // len(monitors)) + random.randint(0, 5),
                     context=context,
                     stop=stop_workers,
