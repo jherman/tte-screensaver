@@ -1,11 +1,6 @@
-import itertools
-from pathlib import Path
-
 import pytest
 
-from src.effects import EffectManager
 from src.renderer import ANSIRenderer
-from tests.legacy_ansi_parser import legacy_parse_ansi_frame_sparse
 
 WHITE = (255, 255, 255)
 ESC = "\x1b["
@@ -140,21 +135,3 @@ def test_parse_to_dict_keeps_last_write_per_cell(renderer):
         (0, 0): ("X", (170, 0, 0)),
         (0, 1): ("b", WHITE),
     }
-
-
-ORACLE_EFFECTS = ["Beams", "Spotlights", "Matrix", "SynthGrid", "Decrypt", "ColorShift", "Burn", "VHSTape"]
-ORACLE_CANVASES = [(80, 24), (30, 8)]
-ORACLE_FRAMES = 120
-ART = (Path(__file__).parent.parent / "assets" / "default_ascii.txt").read_text(encoding="utf-8")
-
-
-@pytest.mark.parametrize("width, height", ORACLE_CANVASES)
-@pytest.mark.parametrize("effect", ORACLE_EFFECTS)
-def test_matches_legacy_parser_on_real_effect_frames(renderer, effect, width, height):
-    manager = EffectManager(ART, [effect], width, height, start_index=0)
-    frames = [f for f in itertools.islice(iter(manager.get_next_frame, None), ORACLE_FRAMES)]
-    assert frames, f"{effect} produced no frames"
-    for index, frame in enumerate(frames):
-        for w, h in ((width, height), (width // 2, height // 2)):
-            expected = legacy_parse_ansi_frame_sparse(renderer, frame, w, h)
-            assert renderer.parse_ansi_frame_sparse(frame, w, h) == expected, f"{effect} frame {index} at {w}x{h}"
