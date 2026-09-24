@@ -247,6 +247,9 @@ class Screensaver:
             self.screen = pygame.display.set_mode(screen_size)
 
         pygame.display.set_caption("TTE Screensaver")
+        # SDL holds a display-required power request while video runs, which stops Windows from
+        # turning the monitors off on its display timeout. A screensaver must not do that.
+        pygame.display.set_allow_screensaver(True)
         self.clock = pygame.time.Clock()
 
         return screen_size
