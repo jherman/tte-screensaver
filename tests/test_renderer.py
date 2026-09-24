@@ -74,3 +74,22 @@ def test_chars_missing_from_the_bundled_font_use_a_fallback_font(renderer, char)
 
 def test_chars_in_the_bundled_font_render_with_it(renderer):
     assert glyph_pixels(renderer.get_char_surface("Z", RED)) == glyph_pixels(renderer.font.render("Z", True, RED))
+
+
+@pytest.mark.parametrize("char", ["█", "═", "╗", "▓", "▄"])
+def test_clearing_a_cell_leaves_no_trace_in_its_neighbors(renderer, char):
+    surface = pygame.Surface((renderer.char_width * 3, renderer.char_height * 3))
+    surface.fill(BLACK)
+
+    renderer.apply_delta(surface, [], [(1, 1, char, RED)])
+    assert lit_pixels(surface, renderer, 1, 1)
+    renderer.apply_delta(surface, [(1, 1)], [])
+
+    assert {surface.get_at((x, y))[:3] for x in range(surface.get_width()) for y in range(surface.get_height())} == {BLACK}
+
+
+def test_a_full_block_still_covers_its_whole_cell(renderer):
+    surface = pygame.Surface((renderer.char_width, renderer.char_height))
+    surface.fill(BLACK)
+    renderer.apply_delta(surface, [], [(0, 0, "█", RED)])
+    assert BLACK not in {surface.get_at((x, y))[:3] for x in range(surface.get_width()) for y in range(surface.get_height())}

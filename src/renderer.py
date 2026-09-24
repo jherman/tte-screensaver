@@ -120,7 +120,12 @@ class ANSIRenderer:
 
     def _render_char(self, char: str, color: Tuple[int, int, int]) -> pygame.Surface:
         if self._fallback_font is None or not self._is_missing_glyph(char):
-            return self.font.render(char, True, color)
+            glyph = self.font.render(char, True, color)
+            if glyph.get_width() <= self.char_width and glyph.get_height() <= self.char_height:
+                return glyph
+            # Block and box-drawing glyphs overhang their cell by a few pixels. Clearing a cell only
+            # repaints that cell, so an overhang would be left behind in the neighbor; crop it.
+            return glyph.subsurface((0, 0, min(glyph.get_width(), self.char_width), min(glyph.get_height(), self.char_height))).copy()
         glyph = self._fallback_font.render(char, True, color)
         cell = pygame.Surface((self.char_width, self.char_height), pygame.SRCALPHA)
         cell.blit(glyph, ((self.char_width - glyph.get_width()) // 2, (self.char_height - glyph.get_height()) // 2))
