@@ -289,16 +289,16 @@ class Screensaver:
         try:
             screen_size = self._init_pygame(fullscreen)
 
-            # Get virtual desktop origin for coordinate conversion
-            vx, vy, _, _ = get_virtual_desktop_size()
-            virtual_origin = (vx, vy)
-
             # Get all monitors and create an effect manager for each
             if fullscreen:
                 monitors = get_monitors()
+                # The fullscreen window starts at the virtual desktop's origin, which may be negative.
+                vx, vy, _, _ = get_virtual_desktop_size()
+                virtual_origin = (vx, vy)
             else:
-                # Single "monitor" for windowed mode
+                # Single "monitor" for windowed mode: the window itself, in window coordinates
                 monitors = [MonitorInfo(x=0, y=0, width=screen_size[0], height=screen_size[1])]
+                virtual_origin = (0, 0)
 
             print(f"Detected {len(monitors)} monitor(s)", file=sys.stderr)
             for i, m in enumerate(monitors):
