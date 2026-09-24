@@ -1,3 +1,4 @@
+import itertools
 import multiprocessing
 import time
 
@@ -5,6 +6,8 @@ import pygame
 import pytest
 
 from src.config import Config
+from src.ansi import parse_frame
+from src.effects import EffectManager
 from src.monitor_worker import WorkerSpec, frame_deltas, run_worker
 from src.renderer import ANSIRenderer
 from src.screensaver import MonitorEffect, MonitorInfo
@@ -45,11 +48,11 @@ def test_each_frame_becomes_a_delta_against_the_previous_frame():
     ]
 
 
-def test_effect_switch_redraws_the_new_effect_from_scratch():
-    effects = ScriptedEffects(("Beams", ["ab"]), ("Matrix", ["a"]))
+def test_effect_switch_clears_what_the_previous_effect_left_on_screen():
+    effects = ScriptedEffects(("Beams", ["ab"]), ("Matrix", [" c"]))
     assert take(frame_deltas(effects, 10, 5), 2) == [
         ("Beams", [], [(0, 0, "a", WHITE), (0, 1, "b", WHITE)]),
-        ("Matrix", [], [(0, 0, "a", WHITE)]),
+        ("Matrix", [(0, 0), (0, 1)], [(0, 1, "c", WHITE)]),
     ]
 
 
@@ -58,8 +61,57 @@ def test_effect_with_no_frames_still_yields_one_empty_delta_per_tick():
     assert take(frame_deltas(effects, 10, 5), 3) == [
         ("Beams", [], [(0, 0, "a", WHITE)]),
         ("Matrix", [], []),
-        ("Rain", [], [(0, 0, "x", WHITE)]),
+        ("Rain", [(0, 0)], [(0, 0, "x", WHITE)]),
     ]
+
+
+class RecordingEffects:
+    """Wraps a real EffectManager and remembers the last non-empty frame it produced."""
+
+    def __init__(self, manager):
+        self.manager = manager
+        self.last_frame = ""
+
+    def get_current_effect_name(self):
+        return self.manager.get_current_effect_name()
+
+    def switch_to_next_effect(self):
+        self.manager.switch_to_next_effect()
+
+    def get_next_frame(self):
+        frame = self.manager.get_next_frame()
+        if frame:
+            self.last_frame = frame
+        return frame
+
+
+def test_screen_matches_a_clean_render_across_effect_switches():
+    renderer = ANSIRenderer(font_size=12)
+    width, height = 24, 5
+    size = (width * renderer.char_width, height * renderer.char_height)
+    effects = RecordingEffects(
+        EffectManager("hi\nthere", ["Print", "Slide", "Wipe", "Expand"], width, height, start_index=0, seed=3)
+    )
+    screen = pygame.Surface(size)
+    screen.fill((0, 0, 0))
+
+    switches = 0
+    previous_name = None
+    for name, clears, draws in itertools.islice(frame_deltas(effects, width, height), 20000):
+        renderer.apply_delta(screen, clears, draws)
+        if previous_name is not None and name != previous_name:
+            switches += 1
+            clean = pygame.Surface(size)
+            clean.fill((0, 0, 0))
+            cells = parse_frame(effects.last_frame, width, height)
+            renderer.apply_delta(clean, [], [(row, col, char, color) for (row, col), (char, color) in cells.items()])
+            assert pygame.image.tobytes(screen, "RGB") == pygame.image.tobytes(clean, "RGB"), (
+                f"leftover glyphs after switching from {previous_name} to {name}"
+            )
+            if switches == 4:
+                break
+        previous_name = name
+    assert switches == 4
 
 
 def wait_for(predicate, timeout=60.0):
