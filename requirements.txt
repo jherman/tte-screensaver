@@ -1,3 +1,2 @@
 terminaltexteffects
-pygame
-pyinstaller
+pygame-ce

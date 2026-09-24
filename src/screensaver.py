@@ -1,15 +1,19 @@
 """Main screensaver pygame loop."""
 
+import multiprocessing
 import os
+import queue
 import sys
 import random
 import pygame
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, Dict
+from multiprocessing.context import BaseContext
+from multiprocessing.synchronize import Event
+from typing import Dict, Optional, Tuple, List
 
 from .config import Config, load_config
-from .renderer import ANSIRenderer, CellData
-from .effects import EffectManager
+from .monitor_worker import WorkerSpec, run_worker
+from .renderer import ANSIRenderer
 
 
 @dataclass
@@ -19,6 +23,23 @@ class MonitorInfo:
     y: int
     width: int
     height: int
+    scale: float = 1.0  # Windows display scaling; 1.5 at 144 DPI. Always 1.0 unless the process is DPI-aware.
+
+
+def enable_dpi_awareness() -> None:
+    """Use physical pixels, so Windows stops bitmap-stretching the window on scaled monitors.
+
+    Call before any window exists or any geometry is read. The setting is process-wide and permanent.
+    """
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+    except (ImportError, AttributeError):
+        return  # Not Windows
+    try:
+        user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # PER_MONITOR_AWARE_V2
+    except AttributeError:
+        user32.SetProcessDPIAware()  # Before Windows 10 1703
 
 
 def get_virtual_desktop_size() -> Tuple[int, int, int, int]:
@@ -55,11 +76,11 @@ def get_monitors() -> List[MonitorInfo]:
 
         # Define the callback type
         MONITORENUMPROC = ctypes.WINFUNCTYPE(
-            ctypes.c_bool,
-            ctypes.c_ulong,
-            ctypes.c_ulong,
+            wintypes.BOOL,
+            wintypes.HMONITOR,
+            wintypes.HDC,
             ctypes.POINTER(wintypes.RECT),
-            ctypes.c_double
+            wintypes.LPARAM,
         )
 
         def monitor_enum_callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
@@ -68,7 +89,8 @@ def get_monitors() -> List[MonitorInfo]:
                 x=rect.left,
                 y=rect.top,
                 width=rect.right - rect.left,
-                height=rect.bottom - rect.top
+                height=rect.bottom - rect.top,
+                scale=_monitor_scale(hMonitor),
             ))
             return True
 
@@ -89,8 +111,21 @@ def get_monitors() -> List[MonitorInfo]:
     return [MonitorInfo(x=vx, y=vy, width=vw, height=vh)]
 
 
+def _monitor_scale(hmonitor) -> float:
+    try:
+        import ctypes
+        from ctypes import wintypes
+        dpi_x, dpi_y = wintypes.UINT(), wintypes.UINT()
+        # MDT_EFFECTIVE_DPI; Windows 8.1+
+        if ctypes.windll.shcore.GetDpiForMonitor(hmonitor, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)) == 0:
+            return dpi_x.value / 96
+    except (AttributeError, OSError):
+        pass
+    return 1.0
+
+
 class MonitorEffect:
-    """Manages effect rendering for a single monitor."""
+    """Draws one monitor's effects, which a worker process generates and diffs."""
 
     def __init__(
         self,
@@ -98,7 +133,11 @@ class MonitorEffect:
         config: Config,
         renderer: ANSIRenderer,
         virtual_origin: Tuple[int, int],
-        start_index: int = 0,
+        start_index: int,
+        context: BaseContext,
+        stop: Event,
+        seed: Optional[int] = None,
+        switch_barrier=None,
     ):
         self.monitor = monitor
         self.config = config
@@ -112,40 +151,56 @@ class MonitorEffect:
         self.canvas_width = monitor.width // renderer.char_width
         self.canvas_height = monitor.height // renderer.char_height
 
-        # Create effect manager for this monitor with unique starting effect
-        self.effect_manager = EffectManager(
+        self.effect_name: Optional[str] = None
+        self._worker_lost = False
+        # Bounded so the worker runs at most two frames ahead of the display.
+        self.deltas = context.Queue(maxsize=2)
+        spec = WorkerSpec(
             text=config.ascii_art,
             enabled_effects=config.enabled_effects,
             canvas_width=self.canvas_width,
             canvas_height=self.canvas_height,
             start_index=start_index,
+            seed=seed,
         )
-
-        # Track previous frame for delta rendering
-        self._prev_cells: Dict[Tuple[int, int], CellData] = {}
+        self._switch_barrier = switch_barrier
+        self.process = context.Process(
+            target=run_worker, args=(spec, self.deltas, stop, switch_barrier), daemon=True
+        )
+        self.process.start()
 
     def update_and_render(self, surface: pygame.Surface) -> None:
-        """Get next frame and render to the surface using delta rendering."""
-        frame = self.effect_manager.get_next_frame()
+        """Blit the worker's next delta, if one is ready. At most one per tick keeps effects at display speed."""
+        if self._worker_lost:
+            return
+        try:
+            self.effect_name, clears, draws = self.deltas.get_nowait()
+        except queue.Empty:
+            if not self.process.is_alive():
+                self._blank(surface)
+            return
+        except Exception as e:
+            print(f"Monitor worker delta unreadable: {e}", file=sys.stderr)
+            self._blank(surface)
+            return
+        self.renderer.apply_delta(surface, clears, draws, self.offset_x, self.offset_y)
 
-        if frame is None:
-            # Effect completed, switch to next random effect
-            self.effect_manager.switch_to_next_effect()
-            # Reset prev_cells on effect switch (need full redraw)
-            self._prev_cells = {}
-            frame = self.effect_manager.get_next_frame()
+    def _blank(self, surface: pygame.Surface) -> None:
+        """A dead worker blanks its monitor instead of taking down the screensaver."""
+        self._worker_lost = True
+        if self._switch_barrier is not None:
+            # Release the other monitors instead of leaving them waiting for this one forever.
+            self._switch_barrier.abort()
+        surface.fill(
+            self.config.background_color,
+            pygame.Rect(self.offset_x, self.offset_y, self.monitor.width, self.monitor.height),
+        )
 
-        if frame:
-            # Use delta rendering - only update changed cells
-            self._prev_cells = self.renderer.render_frame_delta(
-                frame,
-                surface,
-                self._prev_cells,
-                offset_x=self.offset_x,
-                offset_y=self.offset_y,
-                canvas_width=self.canvas_width,
-                canvas_height=self.canvas_height,
-            )
+    def close(self, timeout: float = 1.0) -> None:
+        self.process.join(timeout)
+        if self.process.is_alive():
+            self.process.terminate()
+            self.process.join(timeout)
 
 
 class Screensaver:
@@ -157,7 +212,6 @@ class Screensaver:
         self.running = False
         self.screen: Optional[pygame.Surface] = None
         self.clock: Optional[pygame.time.Clock] = None
-        self.renderer: Optional[ANSIRenderer] = None
         self.monitor_effects: List[MonitorEffect] = []
 
         # Track mouse position for exit detection
@@ -193,6 +247,9 @@ class Screensaver:
             self.screen = pygame.display.set_mode(screen_size)
 
         pygame.display.set_caption("TTE Screensaver")
+        # SDL holds a display-required power request while video runs, which stops Windows from
+        # turning the monitors off on its display timeout. A screensaver must not do that.
+        pygame.display.set_allow_screensaver(True)
         self.clock = pygame.time.Clock()
 
         return screen_size
@@ -223,14 +280,14 @@ class Screensaver:
 
     def run(self, fullscreen: bool = True) -> None:
         """Run the screensaver main loop."""
+        # Spawn on every platform: workers must not inherit pygame or display state.
+        context = multiprocessing.get_context("spawn")
+        stop_workers = context.Event()
+        switch_barrier = None
+        if fullscreen:
+            enable_dpi_awareness()
         try:
             screen_size = self._init_pygame(fullscreen)
-
-            # Create renderer
-            self.renderer = ANSIRenderer(
-                font_size=self.config.font_size,
-                background_color=self.config.background_color,
-            )
 
             # Get virtual desktop origin for coordinate conversion
             vx, vy, _, _ = get_virtual_desktop_size()
@@ -245,15 +302,38 @@ class Screensaver:
 
             print(f"Detected {len(monitors)} monitor(s)", file=sys.stderr)
             for i, m in enumerate(monitors):
-                print(f"  Monitor {i+1}: {m.width}x{m.height} at ({m.x}, {m.y})", file=sys.stderr)
+                print(f"  Monitor {i+1}: {m.width}x{m.height} at ({m.x}, {m.y}) scale {m.scale:g}", file=sys.stderr)
 
-            # Create independent effect for each monitor with different starting effects
-            # Spread start indices apart so monitors don't show same effect
+            # Scale the font with each monitor's DPI so text keeps its physical size and the grid its cell count.
+            renderers: Dict[int, ANSIRenderer] = {}
+
+            def renderer_for(monitor: MonitorInfo) -> ANSIRenderer:
+                font_size = round(self.config.font_size * monitor.scale)
+                if font_size not in renderers:
+                    renderers[font_size] = ANSIRenderer(font_size, self.config.background_color)
+                return renderers[font_size]
+
             num_effects = len(self.config.enabled_effects)
+            if self.config.sync_monitors and len(monitors) > 1:
+                # Same start, same seed: every monitor picks the same effects, and the barrier
+                # makes them switch together.
+                switch_barrier = context.Barrier(len(monitors))
+                shared_seed = random.randrange(2**32)
+                shared_start = random.randrange(num_effects)
+                start_for = lambda i: shared_start
+                seed = shared_seed
+            else:
+                # Spread start indices apart so monitors don't show same effect
+                start_for = lambda i: (i * num_effects // len(monitors)) + random.randint(0, 5)
+                seed = None
             self.monitor_effects = [
                 MonitorEffect(
-                    monitor, self.config, self.renderer, virtual_origin,
-                    start_index=(i * num_effects // len(monitors)) + random.randint(0, 5)
+                    monitor, self.config, renderer_for(monitor), virtual_origin,
+                    start_index=start_for(i),
+                    context=context,
+                    stop=stop_workers,
+                    seed=seed,
+                    switch_barrier=switch_barrier,
                 )
                 for i, monitor in enumerate(monitors)
             ]
@@ -280,7 +360,13 @@ class Screensaver:
             print(f"Screensaver error: {e}", file=sys.stderr)
             raise
         finally:
+            stop_workers.set()
+            if switch_barrier is not None:
+                switch_barrier.abort()
+            # Close the window first so exiting feels instant, then reap the workers.
             pygame.quit()
+            for monitor_effect in self.monitor_effects:
+                monitor_effect.close()
 
 
 def run_screensaver(fullscreen: bool = True, config: Optional[Config] = None) -> None:

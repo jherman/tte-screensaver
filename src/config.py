@@ -65,6 +65,7 @@ class Config:
     font_size: int = 18  # Match Omarchy
     background_color: Tuple[int, int, int] = (0, 0, 0)
     target_fps: int = 120  # Match Omarchy
+    sync_monitors: bool = False  # Every monitor plays the same effect, and they switch together
 
     def to_dict(self) -> dict:
         """Convert config to dictionary for JSON serialization."""
