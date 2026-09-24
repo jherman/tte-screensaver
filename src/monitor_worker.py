@@ -39,8 +39,8 @@ def frame_deltas(
         frame = effects.get_next_frame()
         if frame is None:
             before_switch()
+            # prev_cells stays: the old effect's last frame is still on screen and must be diffed away.
             effects.switch_to_next_effect()
-            prev_cells = {}
             frame = effects.get_next_frame()
 
         if not frame:
