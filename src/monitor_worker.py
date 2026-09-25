@@ -43,11 +43,12 @@ def frame_deltas(
             effects.switch_to_next_effect()
             frame = effects.get_next_frame()
 
-        if not frame:
+        if frame is None:
             yield effects.get_current_effect_name(), [], []
             continue
 
-        cells = parse_frame(frame, canvas_width, canvas_height)
+        # TTE effects yield ANSI text; native effects (src/native_effects) yield Cells directly.
+        cells = frame if isinstance(frame, dict) else parse_frame(frame, canvas_width, canvas_height)
         clears, draws = diff_cells(prev_cells, cells)
         prev_cells = cells
         yield effects.get_current_effect_name(), clears, draws
