@@ -114,12 +114,25 @@ def get_monitors() -> List[MonitorInfo]:
 def display_regions(
     monitors: List[MonitorInfo], mode: str, virtual_desktop: Tuple[int, int, int, int]
 ) -> List[MonitorInfo]:
-    """The regions that each get their own effect: one per monitor, or one covering the whole desktop."""
+    """The regions that each get their own effect: one per monitor, or one spanning the whole desktop.
+
+    Effects center their text on their canvas, so the span region is centered on the primary monitor
+    and grows symmetrically until it covers the desktop. The part past the desktop is off-screen.
+    """
     if mode != "span":
         return monitors
-    x, y, width, height = virtual_desktop
-    scale = max((m.scale for m in monitors), default=1.0)
-    return [MonitorInfo(x=x, y=y, width=width, height=height, scale=scale)]
+    vx, vy, vw, vh = virtual_desktop
+    # Windows always places the primary monitor at (0, 0).
+    primary = next((m for m in monitors if m.x == 0 and m.y == 0), monitors[0])
+    cx = primary.x + primary.width / 2
+    cy = primary.y + primary.height / 2
+    half_w = max(cx - vx, vx + vw - cx)
+    half_h = max(cy - vy, vy + vh - cy)
+    scale = max(m.scale for m in monitors)
+    return [MonitorInfo(
+        x=round(cx - half_w), y=round(cy - half_h),
+        width=round(2 * half_w), height=round(2 * half_h), scale=scale,
+    )]
 
 
 def _monitor_scale(hmonitor) -> float:
