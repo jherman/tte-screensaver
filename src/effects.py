@@ -39,7 +39,7 @@ from terminaltexteffects.effects.effect_vhstape import VHSTape
 from terminaltexteffects.effects.effect_waves import Waves
 from terminaltexteffects.effects.effect_wipe import Wipe
 
-from .native_effects import Hyperspace, Life, Snowfall
+from .native_effects import Bounce, Fireflies, Hyperspace, Life, Pipes, Ripples, Snowfall
 from .sparse_matrix import SparseMatrix
 
 
@@ -48,6 +48,7 @@ AVAILABLE_EFFECTS: Dict[str, Type] = {
     "Beams": Beams,
     "BinaryPath": BinaryPath,
     "Blackhole": Blackhole,
+    "Bounce": Bounce,
     "BouncyBalls": BouncyBalls,
     "Bubbles": Bubbles,
     "Burn": Burn,
@@ -56,6 +57,7 @@ AVAILABLE_EFFECTS: Dict[str, Type] = {
     "Decrypt": Decrypt,
     "ErrorCorrect": ErrorCorrect,
     "Expand": Expand,
+    "Fireflies": Fireflies,
     "Fireworks": Fireworks,
     "Highlight": Highlight,
     "Hyperspace": Hyperspace,
@@ -65,10 +67,12 @@ AVAILABLE_EFFECTS: Dict[str, Type] = {
     "MiddleOut": MiddleOut,
     "OrbittingVolley": OrbittingVolley,
     "Overflow": Overflow,
+    "Pipes": Pipes,
     "Pour": Pour,
     "Print": Print,
     "Rain": Rain,
     "RandomSequence": RandomSequence,
+    "Ripples": Ripples,
     "Rings": Rings,
     "Scattered": Scattered,
     "Slice": Slice,

@@ -1,7 +1,7 @@
 import pytest
 
 from src.effects import AVAILABLE_EFFECTS, EffectManager
-from src.native_effects import Hyperspace, Life, Snowfall
+from src.native_effects import Bounce, Fireflies, Hyperspace, Life, Pipes, Ripples, Snowfall
 from src.native_effects.base import layout_text
 
 WIDTH, HEIGHT = 60, 20
@@ -9,7 +9,7 @@ FPS = 60
 TEXT = "HELLO\nWORLD"
 # Centered on a 60x20 canvas: 2 rows starting at row 9, 5 columns starting at column 27.
 TEXT_CELLS = {(9 + row, 27 + col): char for row, line in enumerate(["HELLO", "WORLD"]) for col, char in enumerate(line)}
-NATIVE_EFFECTS = [Hyperspace, Snowfall, Life]
+NATIVE_EFFECTS = [Hyperspace, Snowfall, Life, Pipes, Ripples, Fireflies, Bounce]
 
 
 def play(effect_class, seconds_limit=60.0):
@@ -73,3 +73,17 @@ def test_layout_centers_ascii_art_and_ignores_its_ansi_codes():
 
 def test_layout_clips_text_larger_than_the_canvas():
     assert layout_text("ABCDE", 3, 1) == {(0, 0): "B", (0, 1): "C", (0, 2): "D"}
+
+
+def test_bounce_hits_a_corner():
+    letters = set(TEXT) - {"\n"}
+
+    def in_a_corner(cells):
+        logo = [pos for pos, (char, _) in cells.items() if char in letters]
+        if len(logo) < len(TEXT_CELLS):
+            return False
+        rows = [row for row, _ in logo]
+        cols = [col for _, col in logo]
+        return (min(rows) == 0 or max(rows) == HEIGHT - 1) and (min(cols) == 0 or max(cols) == WIDTH - 1)
+
+    assert any(in_a_corner(cells) for _, cells in play(Bounce))
