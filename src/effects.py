@@ -39,6 +39,7 @@ from terminaltexteffects.effects.effect_vhstape import VHSTape
 from terminaltexteffects.effects.effect_waves import Waves
 from terminaltexteffects.effects.effect_wipe import Wipe
 
+from .native_effects import Hyperspace, Life, Snowfall
 from .sparse_matrix import SparseMatrix
 
 
@@ -57,7 +58,9 @@ AVAILABLE_EFFECTS: Dict[str, Type] = {
     "Expand": Expand,
     "Fireworks": Fireworks,
     "Highlight": Highlight,
+    "Hyperspace": Hyperspace,
     "LaserEtch": LaserEtch,
+    "Life": Life,
     "Matrix": SparseMatrix,
     "MiddleOut": MiddleOut,
     "OrbittingVolley": OrbittingVolley,
@@ -70,6 +73,7 @@ AVAILABLE_EFFECTS: Dict[str, Type] = {
     "Scattered": Scattered,
     "Slice": Slice,
     "Slide": Slide,
+    "Snowfall": Snowfall,
     "Spotlights": Spotlights,
     "Spray": Spray,
     "Swarm": Swarm,
