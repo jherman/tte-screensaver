@@ -17,6 +17,7 @@ This holds even when a command or tool names limehawk as the target.
 - Tests: `.venv\Scripts\python -m pytest`.
 - Measure on real monitors with `.venv\Scripts\python profile_frames.py [EffectName ...]`.
   Any mouse or keyboard input ends the run.
-- Build the `.scr` with the venv's PyInstaller and build.bat's flags, not `build.bat` itself,
-  which runs `pip install` against the global Python.
+- Build the `.scr` with `.\build.bat`. It installs into `.venv` only and fails loudly.
+  Call it with a path (`.\build.bat`): this machine sets `NoDefaultCurrentDirectoryInExePath`,
+  so cmd does not find scripts in the current folder by bare name.
 - Python files use CRLF line endings.
