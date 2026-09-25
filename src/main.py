@@ -4,12 +4,13 @@ TTE Screensaver - Main entry point.
 Windows screensaver command-line arguments:
   /s - Run the screensaver in fullscreen mode
   /c - Show the configuration dialog
-  /p <hwnd> - Preview mode (not implemented, just exits)
+  /p <hwnd> - Preview: animate the small monitor in Screen Saver Settings (window handle hwnd)
   (no args) - Show configuration dialog
 """
 
 import multiprocessing
 import sys
+from typing import List, Optional
 
 
 def main() -> None:
@@ -33,15 +34,30 @@ def main() -> None:
         from .config_dialog import show_config_dialog
         show_config_dialog()
 
-    elif "/p" in args or "-p" in args:
-        # Preview mode - not implemented, just exit
-        # Windows passes a window handle for preview, but we skip this
-        sys.exit(0)
+    elif _preview_window(args) is not None:
+        from .preview import run_preview
+        run_preview(_preview_window(args))
 
     else:
         # Unknown argument - show config dialog
         from .config_dialog import show_config_dialog
         show_config_dialog()
+
+
+def _preview_window(args: List[str]) -> Optional[int]:
+    """The window handle from "/p <hwnd>" or "/p:<hwnd>", or None if this is not a preview request."""
+    for index, arg in enumerate(args):
+        value = None
+        if arg in ("/p", "-p") and index + 1 < len(args):
+            value = args[index + 1]
+        elif arg.startswith(("/p:", "-p:")):
+            value = arg[3:]
+        if value is not None:
+            try:
+                return int(value)
+            except ValueError:
+                return None
+    return None
 
 
 if __name__ == "__main__":
