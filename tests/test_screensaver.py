@@ -33,6 +33,8 @@ def test_windowed_mode_draws_inside_its_window(monkeypatch):
             pygame.event.post(pygame.event.Event(pygame.QUIT))
 
     monkeypatch.setattr(pygame.display, "flip", flip)
+    # Only this test's QUIT ends the run; someone using the mouse meanwhile must not.
+    monkeypatch.setattr(Screensaver, "_handle_events", lambda self: not any(e.type == pygame.QUIT for e in pygame.event.get()))
     screensaver.run(fullscreen=False)
 
     assert [(m.offset_x, m.offset_y) for m in screensaver.monitor_effects] == [(0, 0)]

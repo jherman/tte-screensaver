@@ -56,6 +56,22 @@ def test_effect_switch_clears_what_the_previous_effect_left_on_screen():
     ]
 
 
+def test_effects_can_yield_cells_directly_instead_of_ansi_text():
+    effects = ScriptedEffects(("Native", [{(0, 0): ("a", RED)}, {(0, 0): ("a", RED), (2, 3): ("b", WHITE)}]), ("Next", ["x"]))
+    assert take(frame_deltas(effects, 10, 5), 2) == [
+        ("Native", [], [(0, 0, "a", RED)]),
+        ("Native", [], [(2, 3, "b", WHITE)]),
+    ]
+
+
+def test_an_empty_frame_clears_the_screen():
+    effects = ScriptedEffects(("Native", [{(0, 0): ("a", RED)}, {}]), ("Next", ["x"]))
+    assert take(frame_deltas(effects, 10, 5), 2) == [
+        ("Native", [], [(0, 0, "a", RED)]),
+        ("Native", [(0, 0)], []),
+    ]
+
+
 def test_effect_with_no_frames_still_yields_one_empty_delta_per_tick():
     effects = ScriptedEffects(("Beams", ["a"]), ("Matrix", []), ("Rain", ["x"]))
     assert take(frame_deltas(effects, 10, 5), 3) == [
