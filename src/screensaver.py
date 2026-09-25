@@ -111,6 +111,17 @@ def get_monitors() -> List[MonitorInfo]:
     return [MonitorInfo(x=vx, y=vy, width=vw, height=vh)]
 
 
+def display_regions(
+    monitors: List[MonitorInfo], mode: str, virtual_desktop: Tuple[int, int, int, int]
+) -> List[MonitorInfo]:
+    """The regions that each get their own effect: one per monitor, or one covering the whole desktop."""
+    if mode != "span":
+        return monitors
+    x, y, width, height = virtual_desktop
+    scale = max((m.scale for m in monitors), default=1.0)
+    return [MonitorInfo(x=x, y=y, width=width, height=height, scale=scale)]
+
+
 def _monitor_scale(hmonitor) -> float:
     try:
         import ctypes
@@ -291,18 +302,22 @@ class Screensaver:
 
             # Get all monitors and create an effect manager for each
             if fullscreen:
-                monitors = get_monitors()
+                detected = get_monitors()
+                virtual_desktop = get_virtual_desktop_size()
+                monitors = display_regions(detected, self.config.monitor_mode, virtual_desktop)
                 # The fullscreen window starts at the virtual desktop's origin, which may be negative.
-                vx, vy, _, _ = get_virtual_desktop_size()
-                virtual_origin = (vx, vy)
+                virtual_origin = virtual_desktop[:2]
             else:
                 # Single "monitor" for windowed mode: the window itself, in window coordinates
-                monitors = [MonitorInfo(x=0, y=0, width=screen_size[0], height=screen_size[1])]
+                detected = monitors = [MonitorInfo(x=0, y=0, width=screen_size[0], height=screen_size[1])]
                 virtual_origin = (0, 0)
 
-            print(f"Detected {len(monitors)} monitor(s)", file=sys.stderr)
-            for i, m in enumerate(monitors):
+            print(f"Detected {len(detected)} monitor(s)", file=sys.stderr)
+            for i, m in enumerate(detected):
                 print(f"  Monitor {i+1}: {m.width}x{m.height} at ({m.x}, {m.y}) scale {m.scale:g}", file=sys.stderr)
+            if monitors is not detected:
+                for m in monitors:
+                    print(f"  Spanning: {m.width}x{m.height} at ({m.x}, {m.y}) scale {m.scale:g}", file=sys.stderr)
 
             # Scale the font with each monitor's DPI so text keeps its physical size and the grid its cell count.
             renderers: Dict[int, ANSIRenderer] = {}
@@ -314,7 +329,7 @@ class Screensaver:
                 return renderers[font_size]
 
             num_effects = len(self.config.enabled_effects)
-            if self.config.sync_monitors and len(monitors) > 1:
+            if self.config.monitor_mode == "sync" and len(monitors) > 1:
                 # Same start, same seed: every monitor picks the same effects, and the barrier
                 # makes them switch together.
                 switch_barrier = context.Barrier(len(monitors))

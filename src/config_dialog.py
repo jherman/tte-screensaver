@@ -7,6 +7,12 @@ from typing import List
 from .config import Config, load_config, save_config
 from .effects import get_available_effect_names
 
+MONITOR_MODE_LABELS = {
+    "Each monitor plays its own effect": "independent",
+    "Same effect on every monitor, in sync": "sync",
+    "One effect spanning all monitors": "span",
+}
+
 
 class ConfigDialog:
     """Configuration dialog for the screensaver."""
@@ -112,12 +118,19 @@ class ConfigDialog:
         fps_entry.pack(side=tk.LEFT, padx=(10, 0))
 
         # Multi-monitor
-        self.sync_monitors_var = tk.BooleanVar(value=self.config.sync_monitors)
-        ttk.Checkbutton(
-            settings_frame,
-            text="Show the same effect on every monitor (monitors switch effects together)",
-            variable=self.sync_monitors_var,
-        ).pack(anchor=tk.W, pady=(6, 2))
+        monitor_frame = ttk.Frame(settings_frame)
+        monitor_frame.pack(fill=tk.X, pady=(6, 2))
+
+        ttk.Label(monitor_frame, text="Multiple monitors:").pack(side=tk.LEFT)
+        label_for_mode = {mode: label for label, mode in MONITOR_MODE_LABELS.items()}
+        self.monitor_mode_var = tk.StringVar(value=label_for_mode[self.config.monitor_mode])
+        ttk.Combobox(
+            monitor_frame,
+            textvariable=self.monitor_mode_var,
+            values=list(MONITOR_MODE_LABELS),
+            state="readonly",
+            width=36,
+        ).pack(side=tk.LEFT, padx=(10, 0))
 
         # Buttons
         button_frame = ttk.Frame(main_frame)
@@ -189,7 +202,7 @@ class ConfigDialog:
             font_size=font_size,
             background_color=self.config.background_color,
             target_fps=fps,
-            sync_monitors=self.sync_monitors_var.get(),
+            monitor_mode=MONITOR_MODE_LABELS[self.monitor_mode_var.get()],
         )
 
     def _save(self) -> None:
