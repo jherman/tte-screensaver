@@ -111,6 +111,30 @@ def get_monitors() -> List[MonitorInfo]:
     return [MonitorInfo(x=vx, y=vy, width=vw, height=vh)]
 
 
+def display_regions(
+    monitors: List[MonitorInfo], mode: str, virtual_desktop: Tuple[int, int, int, int]
+) -> List[MonitorInfo]:
+    """The regions that each get their own effect: one per monitor, or one spanning the whole desktop.
+
+    Effects center their text on their canvas, so the span region is centered on the primary monitor
+    and grows symmetrically until it covers the desktop. The part past the desktop is off-screen.
+    """
+    if mode != "span":
+        return monitors
+    vx, vy, vw, vh = virtual_desktop
+    # Windows always places the primary monitor at (0, 0).
+    primary = next((m for m in monitors if m.x == 0 and m.y == 0), monitors[0])
+    cx = primary.x + primary.width / 2
+    cy = primary.y + primary.height / 2
+    half_w = max(cx - vx, vx + vw - cx)
+    half_h = max(cy - vy, vy + vh - cy)
+    scale = max(m.scale for m in monitors)
+    return [MonitorInfo(
+        x=round(cx - half_w), y=round(cy - half_h),
+        width=round(2 * half_w), height=round(2 * half_h), scale=scale,
+    )]
+
+
 def _monitor_scale(hmonitor) -> float:
     try:
         import ctypes
@@ -291,18 +315,22 @@ class Screensaver:
 
             # Get all monitors and create an effect manager for each
             if fullscreen:
-                monitors = get_monitors()
+                detected = get_monitors()
+                virtual_desktop = get_virtual_desktop_size()
+                monitors = display_regions(detected, self.config.monitor_mode, virtual_desktop)
                 # The fullscreen window starts at the virtual desktop's origin, which may be negative.
-                vx, vy, _, _ = get_virtual_desktop_size()
-                virtual_origin = (vx, vy)
+                virtual_origin = virtual_desktop[:2]
             else:
                 # Single "monitor" for windowed mode: the window itself, in window coordinates
-                monitors = [MonitorInfo(x=0, y=0, width=screen_size[0], height=screen_size[1])]
+                detected = monitors = [MonitorInfo(x=0, y=0, width=screen_size[0], height=screen_size[1])]
                 virtual_origin = (0, 0)
 
-            print(f"Detected {len(monitors)} monitor(s)", file=sys.stderr)
-            for i, m in enumerate(monitors):
+            print(f"Detected {len(detected)} monitor(s)", file=sys.stderr)
+            for i, m in enumerate(detected):
                 print(f"  Monitor {i+1}: {m.width}x{m.height} at ({m.x}, {m.y}) scale {m.scale:g}", file=sys.stderr)
+            if monitors is not detected:
+                for m in monitors:
+                    print(f"  Spanning: {m.width}x{m.height} at ({m.x}, {m.y}) scale {m.scale:g}", file=sys.stderr)
 
             # Scale the font with each monitor's DPI so text keeps its physical size and the grid its cell count.
             renderers: Dict[int, ANSIRenderer] = {}
@@ -314,7 +342,7 @@ class Screensaver:
                 return renderers[font_size]
 
             num_effects = len(self.config.enabled_effects)
-            if self.config.sync_monitors and len(monitors) > 1:
+            if self.config.monitor_mode == "sync" and len(monitors) > 1:
                 # Same start, same seed: every monitor picks the same effects, and the barrier
                 # makes them switch together.
                 switch_barrier = context.Barrier(len(monitors))

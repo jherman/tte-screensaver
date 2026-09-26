@@ -62,6 +62,10 @@ DEFAULT_ASCII_ART = r"""
 ╚══════╝╚═╝╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝  ╚═╝
 """.strip()
 
+# independent: each monitor plays its own effect. sync: every monitor plays the same effect and
+# they switch together. span: one effect across all monitors as a single canvas.
+MONITOR_MODES = ("independent", "sync", "span")
+
 
 @dataclass
 class Config:
@@ -72,7 +76,7 @@ class Config:
     font_size: int = 18  # Match Omarchy
     background_color: Tuple[int, int, int] = (0, 0, 0)
     target_fps: int = 120  # Match Omarchy
-    sync_monitors: bool = False  # Every monitor plays the same effect, and they switch together
+    monitor_mode: str = "independent"  # One of MONITOR_MODES
 
     def to_dict(self) -> dict:
         """Convert config to dictionary for JSON serialization."""
@@ -81,9 +85,14 @@ class Config:
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
         """Create config from dictionary."""
+        data = dict(data)
         # Handle tuple conversion for background_color
         if "background_color" in data and isinstance(data["background_color"], list):
             data["background_color"] = tuple(data["background_color"])
+        # Config files saved before monitor_mode existed carry a sync_monitors boolean.
+        legacy_sync = data.pop("sync_monitors", False)
+        mode = data.get("monitor_mode", "sync" if legacy_sync else "independent")
+        data["monitor_mode"] = mode if mode in MONITOR_MODES else "independent"
         return cls(**data)
 
 
